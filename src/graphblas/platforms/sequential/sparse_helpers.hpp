@@ -40,6 +40,7 @@
 #include <string>
 #include <graphblas/algebra.hpp>
 #include <graphblas/indices.hpp>
+#include <boost/container/vector.hpp>
 
 //****************************************************************************
 
@@ -202,10 +203,10 @@ namespace grb
 
         //************************************************************************
         /// A dot product of two sparse vectors (vectors<tuple(index,value)>)
-        template <typename D1, typename D2, typename D3, typename SemiringT>
+        template <typename D1, typename D2, typename D3, typename SemiringT, typename allocator_t>
         bool dot(D3                                                &ans,
-                 std::vector<std::tuple<grb::IndexType,D1> > const &vec1,
-                 std::vector<std::tuple<grb::IndexType,D2> > const &vec2,
+                 boost::container::vector<std::tuple<grb::IndexType,D1>, allocator_t > const &vec1,
+                 boost::container::vector<std::tuple<grb::IndexType,D2>, allocator_t > const &vec2,
                  SemiringT                                          op)
         {
             bool value_set(false);
@@ -307,10 +308,10 @@ namespace grb
         //************************************************************************
         /// A reduction of a sparse vector (vector<tuple(index,value)>) using a
         /// binary op or a monoid.
-        template <typename D1, typename D3, typename BinaryOpT>
+        template <typename D1, typename D3, typename BinaryOpT, typename allocator_t>
         bool reduction(
             D3                                                &ans,
-            std::vector<std::tuple<grb::IndexType,D1> > const &vec,
+            boost::container::vector<std::tuple<grb::IndexType,D1>, allocator_t > const &vec,
             BinaryOpT                                          op)
         {
             if (vec.empty())
@@ -349,10 +350,10 @@ namespace grb
         ///
         /// @note ans must be a unique vector from either vec1 or vec2
         template <typename D1, typename D2, typename D3, typename BinaryOpT>
-        void ewise_or(std::vector<std::tuple<grb::IndexType,D3> >       &ans,
-                      std::vector<std::tuple<grb::IndexType,D1> > const &vec1,
-                      std::vector<std::tuple<grb::IndexType,D2> > const &vec2,
-                      BinaryOpT                                          op)
+        void ewise_or(D1       &ans,
+                      D2 const &vec1,
+                      D3 const &vec2,
+                      BinaryOpT op)
         {
             if (((void*)&ans == (void*)&vec1) || ((void*)&ans == (void*)&vec2))
             {
@@ -365,6 +366,7 @@ namespace grb
             // point to first entries of the vectors
             auto v1_it = vec1.begin();
             auto v2_it = vec2.begin();
+            using scType = std::tuple_element_t<1, typename D3::value_type>;
 
             // loop through both ordered sets to compute ewise_or
             while ((v1_it != vec1.end()) || (v2_it != vec2.end()))
@@ -379,32 +381,32 @@ namespace grb
                     if (v2_idx == v1_idx)
                     {
                         ans.emplace_back(v1_idx,
-                                         static_cast<D3>(op(v1_val, v2_val)));
+                                         static_cast<scType>(op(v1_val, v2_val)));
 
                         ++v2_it;
                         ++v1_it;
                     }
                     else if (v2_idx > v1_idx)
                     {
-                        ans.emplace_back(v1_idx, static_cast<D3>(v1_val));
+                        ans.emplace_back(v1_idx, static_cast<scType>(v1_val));
                         ++v1_it;
                     }
                     else
                     {
-                        ans.emplace_back(v2_idx, static_cast<D3>(v2_val));
+                        ans.emplace_back(v2_idx, static_cast<scType>(v2_val));
                         ++v2_it;
                     }
                 }
                 else if (v1_it != vec1.end())
                 {
                     ans.emplace_back(std::get<0>(*v1_it),
-                                     static_cast<D3>(std::get<1>(*v1_it)));
+                                     static_cast<scType>(std::get<1>(*v1_it)));
                     ++v1_it;
                 }
                 else // v2_it != vec2.end())
                 {
                     ans.emplace_back(std::get<0>(*v2_it),
-                                     static_cast<D3>(std::get<1>(*v2_it)));
+                                     static_cast<scType>(std::get<1>(*v2_it)));
                     ++v2_it;
                 }
             }
@@ -675,15 +677,15 @@ namespace grb
         }
 
         //**********************************************************************
-        template <typename ZScalarT,
-                  typename WVectorT,
-                  typename TScalarT,
-                  typename BinaryOpT>
+        template <typename R1,
+                  typename R2,
+                  typename R3,
+                  typename R4>
         void ewise_or_opt_accum_1D(
-            std::vector<std::tuple<grb::IndexType,ZScalarT>>       &z,
-            WVectorT const                                         &w,
-            std::vector<std::tuple<grb::IndexType,TScalarT>> const &t,
-            BinaryOpT                                               accum)
+            R1       &z,
+            R2 const &w,
+            R3 const &t,
+            R4 accum)
         {
             //z.clear();
             ewise_or(z, w.getContents(), t, accum);
@@ -799,16 +801,18 @@ namespace grb
          * @param outp     If REPLACE, we should always clear the values specified
          *                 by the mask regardless if they are overlayed.
          */
-        template < typename CScalarT,
-                   typename ZScalarT,
-                   typename MScalarT>
+        template < typename R1,
+                   typename R2,
+                   typename R3,
+                   typename R4>
         void apply_with_mask(
-            std::vector<std::tuple<IndexType, CScalarT> >          &result,
-            std::vector<std::tuple<IndexType, CScalarT> > const    &c_vec,
-            std::vector<std::tuple<IndexType, ZScalarT> > const    &z_vec,
-            std::vector<std::tuple<IndexType, MScalarT> > const    &mask_vec,
+            R1          &result,
+            R2 const    &c_vec,
+            R3 const    &z_vec,
+            R4 const    &mask_vec,
             OutputControlEnum                                       outp)
         {
+            using scType = std::tuple_element_t<1, typename R3::value_type>;
             auto c_it = c_vec.begin();
             auto z_it = z_vec.begin();
             auto mask_it = mask_vec.begin();
@@ -848,7 +852,7 @@ namespace grb
                 {
                     // Now, at the mask point add the value from Z if we have one.
                     result.emplace_back(
-                        mask_idx, static_cast<CScalarT>(std::get<1>(*z_it)));
+                        mask_idx, static_cast<scType>(std::get<1>(*z_it)));
                 }
 
                 // If there is a C here, skip it
@@ -1370,19 +1374,19 @@ namespace grb
         /// vector<tuple<Index, value>>
         ///
         /// c += a_ik*b[:]
-        template<typename CScalarT,
-                 typename SemiringT,
-                 typename AScalarT,
-                 typename BScalarT>
+        template<typename R1,
+                 typename R2,
+                 typename R3,
+                 typename R4>
         void axpy(
-            std::vector<std::tuple<IndexType, CScalarT>>       &c,
-            SemiringT                                           semiring,
-            AScalarT                                            a,
-            std::vector<std::tuple<IndexType, BScalarT>> const &b)
+            R1 &c,
+            R2 semiring,
+            R3 a,
+            R4 const &b)
         {
             GRB_LOG_FN_BEGIN("axpy");
             auto c_it = c.begin();
-
+            using scType = std::tuple_element_t<1, typename R1::value_type>;
             for (auto&& [j, b_j] : b)
             {
                 GRB_LOG_VERBOSE("j = " << j);
@@ -1401,7 +1405,7 @@ namespace grb
                 {
                     GRB_LOG_VERBOSE("Inserting");
                     c_it = c.insert(c_it,
-                                    std::make_tuple(j, static_cast<CScalarT>(t_j)));
+                                    std::make_tuple(j, static_cast<scType>(t_j)));
                     ++c_it;
                 }
             }

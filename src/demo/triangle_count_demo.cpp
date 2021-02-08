@@ -35,6 +35,11 @@
 #include <algorithms/triangle_count.hpp>
 #include "Timer.hpp"
 
+
+#include <metall/metall.hpp>
+#include <metall_utility/fallback_allocator_adaptor.hpp>
+
+
 //****************************************************************************
 int main(int argc, char **argv)
 {
@@ -136,13 +141,20 @@ int main(int argc, char **argv)
         idx++;
     }
 
+    my_timer.start();
     grb::IndexType NUM_NODES(max_id + 1);
     using T = int32_t;
+    using allocator_t = metall::utility::fallback_allocator_adaptor<metall::manager::allocator_type<char>>;
+    using Metall_MatType = grb::Matrix<T, allocator_t>;
     std::vector<T> v(iA.size(), 1);
 
     /// @todo change scalar type to unsigned int or grb::IndexType
-    using MatType = grb::Matrix<T, grb::DirectedMatrixTag>;
+    // using MatType = grb::Matrix<T, grb::DirectedMatrixTag>;
 
+    //================= Graph Construction in Metall Scope ========================
+
+    {    
+    /*
     MatType A(NUM_NODES, NUM_NODES);
     MatType L(NUM_NODES, NUM_NODES);
     MatType U(NUM_NODES, NUM_NODES);
@@ -150,50 +162,52 @@ int main(int argc, char **argv)
     A.build(iA.begin(), jA.begin(), v.begin(), iA.size());
     L.build(iL.begin(), jL.begin(), v.begin(), iL.size());
     U.build(iU.begin(), jU.begin(), v.begin(), iU.size());
+    */
+        metall::manager manager(metall::create_only, "/tmp/kaushik/datastore");
+        Metall_MatType *L = manager.construct<Metall_MatType>("gbtl_vov_matrix")
+                        ( NUM_NODES, NUM_NODES, manager.get_allocator());
+        L->build(iL.begin(), jL.begin(), v.begin(), iL.size());
 
+    }
+    my_timer.stop();
+    std::cout << "Graph Construction time: " << my_timer.elapsed() << " usec." << std::endl;  
+    
     std::cout << "Running algorithm(s)..." << std::endl;
     T count(0);
 
     // Perform triangle counting with different algorithms
     //===================
-    my_timer.start();
-    count = algorithms::triangle_count(A);
-    my_timer.stop();
+    //================= Triangle Counting in Metall Scope =========================
 
-    std::cout << "# triangles (L,U=split(A); B=LL'; C=A.*B; #=|C|/2) = " << count << std::endl;
-    std::cout << "Elapsed time: " << my_timer.elapsed() << " usec." << std::endl;
+    {
+        metall::manager manager(metall::open_only, "/tmp/kaushik/datastore");
+        Metall_MatType *L = manager.find<Metall_MatType>("gbtl_vov_matrix").first;
 
-    //===================
-    my_timer.start();
-    count = algorithms::triangle_count_masked(L, U);
-    my_timer.stop();
 
-    std::cout << "# triangles (C<L> = L +.* U; #=|C|) = " << count << std::endl;
-    std::cout << "Elapsed time: " << my_timer.elapsed() << " usec." << std::endl;
 
-    //===================
-    my_timer.start();
-    count = algorithms::triangle_count_masked(L);
-    my_timer.stop();
+        my_timer.start();
+        count = algorithms::triangle_count_masked(*L);
+        my_timer.stop();
 
-    std::cout << "# triangles (C<L> = L +.* L'; #=|C|) = " << count << std::endl;
-    std::cout << "Elapsed time: " << my_timer.elapsed() << " usec." << std::endl;
+        std::cout << "# triangles (C<L> = L +.* L'; #=|C|) = " << count << std::endl;
+        std::cout << "Elapsed time: " << my_timer.elapsed() << " usec." << std::endl;
+    }
 
-    //===================
-    my_timer.start();
-    count = algorithms::triangle_count_masked_noT(L);
-    my_timer.stop();
+    {
+        metall::manager manager(metall::open_only, "/tmp/kaushik/datastore");
+        Metall_MatType *L = manager.find<Metall_MatType>("gbtl_vov_matrix").first;
 
-    std::cout << "# triangles (C<L> = L +.* L; #=|C|) = " << count << std::endl;
-    std::cout << "Elapsed time: " << my_timer.elapsed() << " usec." << std::endl;
+        my_timer.start();
+        count = algorithms::triangle_count_masked_noT(*L);
+        my_timer.stop();
 
-    //===================
-    my_timer.start();
-    count = algorithms::triangle_count_newGBTL(L, U);
-    my_timer.stop();
+        std::cout << "# triangles (C<L> = L +.* L; #=|C|) = " << count << std::endl;
+        std::cout << "Elapsed time: " << my_timer.elapsed() << " usec." << std::endl;
+        std::cout << "Algorithm time: " << my_timer.elapsed() << " usec." << std::endl;
 
-    std::cout << "# triangles (B=LU; C=L.*B; #=|C|) = " << count << std::endl;
-    std::cout << "Elapsed time: " << my_timer.elapsed() << " usec." << std::endl;
+        // manager.destroy<Metall_MatType>("gbtl_vov_matrix"); // Destroy the object
+    }
+
 
     return 0;
 }

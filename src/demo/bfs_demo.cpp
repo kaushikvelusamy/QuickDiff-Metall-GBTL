@@ -26,9 +26,15 @@
  */
 
 #include <iostream>
+#include <fstream>
+#include <chrono>
+#include "Timer.hpp"
 
 #include <graphblas/graphblas.hpp>
 #include <algorithms/bfs.hpp>
+
+#include <metall/metall.hpp>
+#include <metall_utility/fallback_allocator_adaptor.hpp>
 
 //****************************************************************************
 int main()
@@ -47,7 +53,7 @@ int main()
 
     /// @todo change scalar type to unsigned int or grb::IndexType
     using T = grb::IndexType;
-    using GBMatrix = grb::Matrix<T, grb::DirectedMatrixTag>;
+    // using GBMatrix = grb::Matrix<T, grb::DirectedMatrixTag>;
     //T const INF(std::numeric_limits<T>::max());
 
     grb::IndexType const NUM_NODES = 9;
@@ -57,34 +63,41 @@ int main()
                              2, 3, 8, 2, 1, 2, 3, 2, 4};
     std::vector<T> v(i.size(), 1);
 
-    GBMatrix G_tn(NUM_NODES, NUM_NODES);
-    G_tn.build(i.begin(), j.begin(), v.begin(), i.size());
+    // GBMatrix G_tn(NUM_NODES, NUM_NODES);
+    // G_tn.build(i.begin(), j.begin(), v.begin(), i.size());
     grb::print_matrix(std::cout, G_tn, "Graph adjacency matrix:");
 
     // Perform a single BFS
-    grb::Vector<T> parent_list(NUM_NODES);
-    grb::Vector<T> root(NUM_NODES);
-    root.setElement(3, 1);
-    algorithms::bfs(G_tn, root, parent_list);
-    grb::print_vector(std::cout, parent_list, "Parent list for root at vertex 3");
 
-    // Perform BFS from all roots simultaneously (should the value be 0?)
-    //auto roots = grb::identity<GBMatrix>(NUM_NODES, INF, 0);
-    GBMatrix roots(NUM_NODES, NUM_NODES);
-    grb::IndexArrayType ii, jj, vv;
-    for (grb::IndexType ix = 0; ix < NUM_NODES; ++ix)
+    using allocator_t = metall::utility::fallback_allocator_adaptor<metall::manager::allocator_type<char>>;
+    using Metall_GBMatrix = grb::Matrix<T, allocator_t>;
+
+    //================= Graph Construction in Metall Scope ========================
+
     {
-        ii.push_back(ix);
-        jj.push_back(ix);
-        vv.push_back(1);
+        metall::manager manager(metall::create_only, "/tmp/kaushik/datastore");
+        Metall_GBMatrix *G_tn = manager.construct<Metall_GBMatrix>("gbtl_vov_matrix")
+                        ( NUM_NODES, NUM_NODES, manager.get_allocator());
+        G_tn->build(i.begin(), j.begin(), v.begin(), i.size());
     }
-    roots.build(ii, jj, vv);
-
-    GBMatrix G_tn_res(NUM_NODES, NUM_NODES);
-
-    algorithms::bfs_batch(G_tn, roots, G_tn_res);
-
-    grb::print_matrix(std::cout, G_tn_res, "Parents for each root (by rows):");
+    my_timer.stop();
+    std::cout << "Graph Construction time: " << my_timer.elapsed() << " usec." << std::endl;  
+    
+    //================= single BFS in Metall Scope ================================
+    
+    my_timer.start();
+    {
+        metall::manager manager(metall::open_only, "/tmp/kaushik/datastore");
+        Metall_GBMatrix *G_tn = manager.find<Metall_GBMatrix>("gbtl_vov_matrix").first;
+        grb::Vector<T> parent_list(NUM_NODES);
+        grb::Vector<T> root(NUM_NODES);
+        root.setElement(i.front(), j.front());
+        // Perform a single BFS
+        algorithms::bfs(*G_tn, root, parent_list);
+        //grb::print_vector(std::cout, parent_list, "Parent list for root at vertex 3");
+    }
+    my_timer.stop();
+    std::cout << "Algorithm time: " << my_timer.elapsed() << " usec." << std::endl;
 
     return 0;
 }
